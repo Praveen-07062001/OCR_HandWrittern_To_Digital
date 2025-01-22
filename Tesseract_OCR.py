@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import cv2
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, LSTM, Dense, Reshape, BatchNormalization
 from tensorflow.keras.optimizers import Adam
@@ -63,7 +64,7 @@ def convert_pdf_to_images(pdf_path, output_dir):
 
 # OCR using Tesseract
 def extract_text_from_images(image_dir, output_txt_path):
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Users\BrindhaBrahmanandaBa\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Users\Praveen\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
     os.makedirs(os.path.dirname(output_txt_path), exist_ok=True)
     with open(output_txt_path, "w") as text_file:
         for image_file in os.listdir(image_dir):
@@ -95,12 +96,12 @@ def evaluate_model(model, X_test, y_test, label_decoder):
         y_test: Test labels (actual text).
         label_decoder: Function to decode model predictions into readable text.
     """
-    # Get model predictions (ensure the shape matches expected: (batch_size, time_steps, num_classes))
+    # Get model predictions
     predictions = model.predict(X_test)
     
     # Decode predictions and ground truth to text
-    predicted_texts = label_decoder(predictions)  # Use the decoder on the whole batch
-    actual_texts = [label_decoder([label])[0] for label in y_test]  # Decode ground truth one at a time
+    predicted_texts = [label_decoder(pred) for pred in predictions]
+    actual_texts = [label_decoder(label) for label in y_test]
     
     # Calculate CER and WER
     cer = calculate_cer(predicted_texts, actual_texts)
@@ -114,34 +115,60 @@ def evaluate_model(model, X_test, y_test, label_decoder):
 def decode_labels(output, char_list):
     """
     Decodes the output of the model using CTC decoding.
-
+    
     Parameters:
-        output: The raw predictions from the model (shape: (batch_size, time_steps, num_classes)).
+        output: The raw predictions from the model.
         char_list: List of characters used in training (alphabet, numbers, etc.).
     """
     decoded_texts = []
     for out in output:
-        # Ensure the output is a 2D array (time_steps, num_classes)
         out_text = ''.join([char_list[idx] for idx in np.argmax(out, axis=1) if idx != -1])  # Ignore blank labels (-1)
         decoded_texts.append(out_text)
     return decoded_texts
+
+# Function to load images from a directory
+def load_images_from_directory(directory, img_height=128, img_width=32):
+    image_data = []
+    filenames = sorted(os.listdir(directory))  # Assuming the filenames correspond to the correct order
+    for filename in filenames:
+        if filename.endswith(".png"):  # Or another image format you are using
+            image_path = os.path.join(directory, filename)
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            image = cv2.resize(image, (img_width, img_height))
+            image = np.expand_dims(image, axis=-1)  # Add the channel dimension (height, width, 1)
+            image_data.append(image)
+    return np.array(image_data)
+
+# Function to load labels from a file
+def load_labels_from_file(label_file):
+    with open(label_file, 'r') as file:
+        labels = file.readlines()
+    labels = [label.strip() for label in labels]  # Clean up extra spaces or newlines
+    return labels
+
+# Function to pad labels
+def pad_labels(labels, max_length=5, num_classes=36):
+    label_indices = [[char_list.index(char) for char in label] for label in labels]
+    padded_labels = pad_sequences(label_indices, maxlen=max_length, padding='post', value=-1)
+    return padded_labels
 
 # Paths
 pdf_path = r"D:\data_subset_pdf\input.pdf"
 output_image_dir = r"D:\data_subset_pdf\output_images2"
 output_txt_path = r"D:\data_subset_pdf\output_text\extracted_text.txt"
 
-# Example test data
-X_test = np.random.rand(10, height, width, 1)  # 10 random grayscale images
-y_test = np.random.randint(0, num_classes, size=(10, 5))  # 10 random labels (e.g., 5 characters per image)
+# Load your actual test data
+X_test = load_images_from_directory("D:\data_subset")
+y_test = load_labels_from_file('D:/test_labels.txt'')
 
-# Ensure the labels are padded or truncated as necessary
-y_test = pad_sequences(y_test, maxlen=5, padding='post', value=-1)
+# Preprocess and pad labels
+y_test_padded = pad_labels(y_test, max_length=5)
 
-# Decode labels function
-char_list = "abcdefghijklmnopqrstuvwxyz0123456789"  # Example character set
+# Normalize images
+X_test = X_test.astype(np.float32) / 255.0  # Normalize pixel values to [0, 1]
 
-# Mock label decoder for predictions and ground truth
+# Decode function for the test
+char_list = "abcdefghijklmnopqrstuvwxyz0123456789"  # Or your own character set
 label_decoder = lambda output: decode_labels(output, char_list)
 
 # Run pipeline
@@ -150,5 +177,5 @@ if __name__ == "__main__":
 
     # Example usage for evaluation
     # Evaluate the model
-    cer, wer = evaluate_model(model, X_test, y_test, label_decoder)
+    cer, wer = evaluate_model(model, X_test, y_test_padded, label_decoder)
     print(f"Final Evaluation Results:\nCER: {cer:.4f}, WER: {wer:.4f}")
